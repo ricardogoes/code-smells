@@ -1,0 +1,1272 @@
+﻿/// Visual Studio Maintainability Index: 70
+/// Cyclomatic Complexity (overall for class): 160
+/// Class Coupling: 79
+/// Lines of Code: 400
+
+using System;
+using System.Collections.Generic;
+using System.Configuration;
+using System.Data;
+using System.Data.SqlClient;
+using System.Diagnostics;
+using System.Web.Caching;
+using System.Web.Security;
+using Ardalis.Framework;
+using Ardalis.Framework.Caching;
+using Ardalis.Framework.Data;
+using LQ.Business.Factories;
+using LQ.Business.Implementations;
+using LQ.Business.Interfaces;
+using LQ.Business.Interfaces.Repositories;
+using LQ.Business.Repositories;
+using LQ.Business.Services;
+using LQ.Data.EntityClasses;
+using LQ.Data.FactoryClasses;
+using LQ.Data.HelperClasses;
+using LQ.Data.Sql;
+using SD.LLBLGen.Pro.ORMSupportClasses;
+using Debug = Ardalis.Framework.Diagnostics.Debug;
+using Math = Ardalis.Framework.Math;
+
+namespace LQ.Business
+{
+    public class Site : SqlCacheableBusinessObject, IAccount
+    {
+        private readonly SiteEntity _siteEntity;
+
+        #region Constructors
+
+        public Site(int id)
+            : this(id, new SqlPersistenceLayer())
+        {
+        }
+
+        public Site()
+            : this(new SqlPersistenceLayer())
+        {
+        }
+
+        public Site(int id, IPersistenceLayer persistenceLayer)
+        {
+            PersistenceLayer = persistenceLayer;
+            string cacheKey = GetCacheKey(id);
+            _siteEntity = SuperCache.Instance()[cacheKey] as SiteEntity;
+            if (_siteEntity == null)
+            {
+                _siteEntity = new SiteEntity(id);
+                using (MyAdapter = PersistenceLayer.GetDataAccessAdapter())
+                {
+                    if (!MyAdapter.FetchEntity(_siteEntity))
+                    {
+                        throw new IndexOutOfRangeException("Invalid Publisher (ID=" + id + ")");
+                    }
+                }
+                UpdateCachedEntity(cacheKey);
+                Debug.Print("Publisher " + id + " loaded from database.");
+            }
+            else
+            {
+                Debug.Print("Publisher " + id + " loaded from cache.");
+            }
+        }
+
+        public Site(IPersistenceLayer persistenceLayer)
+            : this(persistenceLayer, new SiteEntity())
+        {
+        }
+
+        public Site(SiteEntity siteEntity)
+            : this(new SqlPersistenceLayer(), siteEntity)
+        {
+        }
+
+        public Site(IPersistenceLayer persistenceLayer, SiteEntity siteEntity)
+        {
+            PersistenceLayer = persistenceLayer;
+            _siteEntity = siteEntity;
+        }
+        #endregion
+
+        #region Properties
+
+        private IW9FormRepository _w9FormRepository;
+        public IW9FormRepository W9FormRepository
+        {
+            get
+            {
+                if (_w9FormRepository == null)
+                {
+                    _w9FormRepository = new W9FormRepository(PersistenceLayer);
+                }
+                return _w9FormRepository;
+            }
+        }
+
+        public int PublisherAccountId
+        {
+            [DebuggerStepThrough]
+            get { return _siteEntity.PublisherAccountId??0; }
+            [DebuggerStepThrough]
+            set { _siteEntity.PublisherAccountId = value; }
+        }
+
+        private PublisherAccount _publisherAccount;
+        public PublisherAccount PublisherAccount
+        {
+            get
+            {
+                if (_publisherAccount == null)
+                {
+                    if(PublisherAccountId > 0)
+                    {
+                        _publisherAccount = new PublisherAccount(PublisherAccountId);
+                    }
+                    else
+                    {
+                         _publisherAccount = new PublisherAccount();
+                    }
+                }
+                return _publisherAccount;
+            }
+        }
+
+        private Dictionary<RankTypes, RankItem> _rankItems;
+
+        public override string TableDependency
+        {
+            get { return "lq_Site"; }
+        }
+
+        public string InternalNotes
+        {
+            [DebuggerStepThrough]
+            get { return _siteEntity.InternalNotes; }
+            [DebuggerStepThrough]
+            set { _siteEntity.InternalNotes = value; }
+        }
+
+        public string LogoUrl
+        {
+            [DebuggerStepThrough]
+            get { return _siteEntity.LogoUrl; }
+            [DebuggerStepThrough]
+            set { _siteEntity.LogoUrl = value; }
+        }
+
+        public string Url
+        {
+            [DebuggerStepThrough]
+            get { return _siteEntity.Url; }
+            [DebuggerStepThrough]
+            set { _siteEntity.Url = value; }
+        }
+
+        // TODO: Should be renamed to the one below. 
+        public int Status
+        {
+            [DebuggerStepThrough]
+            get { return _siteEntity.Status; }
+            set
+            {
+                _siteEntity.Status = value;
+                DateStatusChanged = DateTime.Now;
+            }
+        }
+
+        public int StatusId
+        {
+            get { return _siteEntity.Status; }
+            set
+            {
+                _siteEntity.Status = value;
+                DateStatusChanged = DateTime.Now;
+            }
+        }
+
+        public bool IsPersonalBlog
+        {
+            [DebuggerStepThrough]
+            get { return _siteEntity.IsPersonalBlog; }
+            set
+            {
+                _siteEntity.IsPersonalBlog = value;
+            }
+        }
+
+        public DateTime DateStatusChanged
+        {
+            [DebuggerStepThrough]
+            get { return _siteEntity.DateStatusChanged; }
+            [DebuggerStepThrough]
+            set { _siteEntity.DateStatusChanged = value; }
+        }
+
+        public W9Status W9FormStatus
+        {
+            get
+            {
+                int w9Count = W9FormCollection.Count;
+                if (w9Count == 0)
+                {
+                    return W9Status.NotOnFile;
+                }
+                if (RecentW9Form.DateVerified.HasValue)
+                {
+                    return W9Status.Verified;
+                }
+                return W9Status.Unverified;
+            }
+        }
+
+        private int? _recentW9FormId;
+        public W9Form RecentW9Form
+        {
+            get
+            {
+                W9Form recentW9Form = null;
+                if (!_recentW9FormId.HasValue && W9FormCollection.Count > 0)
+                {
+                    recentW9Form = W9FormCollection[0];
+                    foreach (W9Form w9Form in W9FormCollection)
+                    {
+                        if (w9Form.DateSigned > recentW9Form.DateSigned)
+                        {
+                            recentW9Form = w9Form;
+                        }
+                    }
+                    _recentW9FormId = recentW9Form.Id;
+                }
+                else if (_recentW9FormId.HasValue)
+                {
+                    recentW9Form = new W9Form(_recentW9FormId.Value, PersistenceLayer);
+                }
+                return recentW9Form;
+            }
+        }
+
+        public List<W9Form> W9FormCollection
+        {
+            get
+            {
+                return W9FormRepository.ListW9FormsByPublisherId(Id);
+            }
+        }
+
+        public PaymentInfo PaymentInfo
+        {
+            get
+            {
+                return PublisherAccount != null ? PublisherAccount.PaymentInfo : null;
+            }
+        }
+
+        public Dictionary<RankTypes, RankItem> RankItems
+        {
+            get
+            {
+                if (_rankItems == null)
+                {
+                    var allPublisherRankItems =
+                        SuperCache.Instance()["PublisherRankingItems"] as
+                        Dictionary<int, Dictionary<RankTypes, RankItem>>;
+                    if (allPublisherRankItems == null)
+                    {
+                        allPublisherRankItems = FetchRankItems(DateTime.Today.AddDays(-1));
+                        SuperCache.Instance().Insert("PublisherRankingItems", allPublisherRankItems, 3600);
+                    }
+                    if (allPublisherRankItems.ContainsKey(Id))
+                    {
+                        _rankItems = allPublisherRankItems[Id];
+                    }
+                }
+                return _rankItems;
+            }
+        }
+
+        public bool HasZones
+        {
+            get
+            {
+                int result;
+                using (MyAdapter = new DataAccessAdapter())
+                {
+                    result = MyAdapter.GetDbCount(new EntityCollection<ZoneEntity>(),
+                                                  new RelationPredicateBucket(ZoneFields.PublisherId == Id));
+                }
+                return result > 0;
+            }
+        }
+
+        public PublisherProfile Profile
+        {
+            get
+            {
+                var publisherProfile = new PublisherProfile(Id, PersistenceLayer);
+                return publisherProfile;
+            }
+        }
+
+        public DevMaven DevMaven
+        {
+            get
+            {
+                if (Profile != null)
+                {
+                    var myDevMaven = new DevMaven();
+                    myDevMaven.PublisherId = Id;
+                    myDevMaven.BlogRssUrl = Profile.BlogRssUrl;
+                    myDevMaven.BlogUrl = Profile.BlogUrl;
+                    myDevMaven.Description = Profile.Description;
+                    myDevMaven.FeedBurnerName = Profile.FeedBurnerName;
+                    myDevMaven.FullName = Profile.FullName;
+                    myDevMaven.MvpProfileUrl = Profile.MvpProfileUrl;
+                    myDevMaven.RdProfileUrl = Profile.RdProfileUrl;
+                    myDevMaven.TwitterName = Profile.TwitterName;
+                    //myDevMaven.Alias = this.Profile.Alias;
+                    return myDevMaven;
+                }
+                return null;
+            }
+        }
+
+        public int DevMavenStatus
+        {
+            [DebuggerStepThrough]
+            get { return _siteEntity.DevMavensStatusId; }
+            [DebuggerStepThrough]
+            set { _siteEntity.DevMavensStatusId = value; }
+        }
+
+        public override int Id
+        {
+            [DebuggerStepThrough]
+            get { return _siteEntity.Id; }
+            [DebuggerStepThrough]
+            set { _siteEntity.Id = value; }
+        }
+
+        public string Name
+        {
+            [DebuggerStepThrough]
+            get { return _siteEntity.Name; }
+            [DebuggerStepThrough]
+            set { _siteEntity.Name = value; }
+        }
+
+        public string Description
+        {
+            [DebuggerStepThrough]
+            get { return _siteEntity.Description; }
+            [DebuggerStepThrough]
+            set { _siteEntity.Description = value; }
+        }
+
+        public string ReferredBy
+        {
+            [DebuggerStepThrough]
+            get { return _siteEntity.ReferredBy; }
+            [DebuggerStepThrough]
+            set { _siteEntity.ReferredBy = value; }
+        }
+
+        public int? PaymentInfoId
+        {
+            [DebuggerStepThrough]
+            get { return PublisherAccount.PaymentInfoId; }
+            [DebuggerStepThrough]
+            set { PublisherAccount.PaymentInfoId = value; }
+        }
+
+        public string Type
+        {
+            get { return "Publisher"; }
+        }
+
+        public string QueryStringKey
+        {
+            get { return "siteId"; }
+        }
+
+        #endregion
+
+        protected override IEntity2 thisEntity()
+        {
+            return _siteEntity;
+        }
+
+        public decimal CurrentBalanceDue()
+        {
+            const string query = @"
+                SELECT (SELECT ISNULL(SUM(r.Amount),0)
+                FROM lq_PublisherRevenueSummary r
+                WHERE r.PublisherID = @PublisherId) - 
+                (SELECT ISNULL(SUM(p.Amount),0)
+                FROM lq_PublisherPayment p
+                WHERE p.PublisherID = @PublisherId) as 'Current Balance Due'
+                ";
+            var sqlParams = new List<SqlParameter> { new SqlParameter("@PublisherId", Id) };
+            Debug.LogQueryDetails(query, sqlParams);
+
+            var balance = (decimal)SqlHelper.ExecuteScalar(Common.ConnectionString,
+                CommandType.Text, query, sqlParams.ToArray());
+            Debug.Print("Balance Due: " + balance);
+            return balance;
+        }
+
+        public bool IsUserOnAccount(Guid userId)
+        {
+            // try to fetch the row from advertiser_user table.
+            using (IDataAccessAdapter myAdapter = PersistenceLayer.GetDataAccessAdapter())
+            {
+                var publisherAccountUsers = new PublisherAccountUsersEntity(PublisherAccountId, userId);
+                return myAdapter.FetchEntity(publisherAccountUsers);
+            }
+        }
+
+        /// <summary>
+        /// If the user is not associated with the account, adds them to it.
+        /// If the user is not in the publishers role, adds them to it.
+        /// </summary>
+        /// <param name="userId"></param>
+        public void AddUserToAccount(Guid userId)
+        {
+            new PublisherRegistrationService(PersistenceLayer).AddUserToPublisherAccount(userId, Id);
+        }
+
+        public string GravatarEmail 
+        { 
+            get { return _siteEntity.GravatarEmail; } 
+            set { _siteEntity.GravatarEmail = value;}
+        }
+        
+        protected static Dictionary<int, Dictionary<RankTypes, RankItem>> FetchRankItems(DateTime dateToFetch)
+        {
+            var rankItems = new Dictionary<int, Dictionary<RankTypes, RankItem>>();
+            var sqlParams = new List<SqlParameter> { new SqlParameter("@EndDate", dateToFetch) };
+            DataSet rankData = SqlHelper.ExecuteDataset(
+                ConfigurationManager.ConnectionStrings["Main"].ConnectionString,
+                CommandType.StoredProcedure,
+                "dbo.lq_PublisherRanking_s",
+                sqlParams.ToArray());
+            if (rankData.Tables.Count > 0 && rankData.Tables[0].Rows.Count > 0)
+            {
+                foreach (DataRow rankEntry in rankData.Tables[0].Rows)
+                {
+                    var publisherItems = new Dictionary<RankTypes, RankItem>();
+
+                    var overallItem = new RankItem
+                                          {
+                                              Rank = ((int)rankEntry["OverallRank"]),
+                                              RawValue = ((int)rankEntry["Overall"])
+                                          };
+                    publisherItems.Add(RankTypes.Overall, overallItem);
+
+                    var impressionsItem = new RankItem
+                                              {
+                                                  Rank = ((int)rankEntry["ImpressionsRank"]),
+                                                  RawValue = ((int)rankEntry["Impressions"])
+                                              };
+                    publisherItems.Add(RankTypes.Impressions, impressionsItem);
+
+                    var clicksItem = new RankItem
+                                         {
+                                             Rank = ((int)rankEntry["ClicksRank"]),
+                                             RawValue = ((int)rankEntry["Clicks"])
+                                         };
+                    publisherItems.Add(RankTypes.Clicks, clicksItem);
+
+                    var ctrItem = new RankItem
+                                      {
+                                          Rank = ((int)rankEntry["CTRRank"]),
+                                          RawValue = ((double)(decimal)rankEntry["CTR"])
+                                      };
+                    publisherItems.Add(RankTypes.CTR, ctrItem);
+
+                    var cpmItem = new RankItem
+                                      {
+                                          Rank = ((int)rankEntry["CPMRank"]),
+                                          RawValue = ((double)(decimal)rankEntry["CPM"])
+                                      };
+                    publisherItems.Add(RankTypes.CPM, cpmItem);
+
+                    //RankItem googleItem = new RankItem();
+                    //googleItem.Rank = (int)rankEntry["GoogleNetworkRank"];
+                    //googleItem.RawValue = (double)rankEntry["GoogleRank"];
+                    //publisherItems.Add(RankTypes.Google, googleItem);
+
+                    //RankItem alexaItem = new RankItem();
+                    //alexaItem.Rank = (int)rankEntry["AlexaNetworkRank"];
+                    //alexaItem.RawValue = (double)rankEntry["AlexaRank"];
+                    //publisherItems.Add(RankTypes.Alexa, alexaItem);
+
+                    rankItems.Add((int)rankEntry["PublisherID"], publisherItems);
+                }
+            }
+            else
+            {
+                Debug.Print("Warning: Did not find any rank data for the publisher.");
+            }
+            return rankItems;
+        }
+
+        #region Static Methods
+
+        public static void DeletePublisherUser(int pubId, string userName)
+        {
+            MembershipUser myUser = Membership.GetUser(userName);
+            string userId = myUser.ProviderUserKey.ToString();
+            var myGuid = new Guid(userId);
+
+            using (var myAdapter = new DataAccessAdapter())
+            {
+                var myPublisherUser = new PublisherAccountUsersEntity(pubId, myGuid);
+                myAdapter.DeleteEntity(myPublisherUser);
+            }
+        }
+
+        public bool IsUserRemovable(string userNameToRemove, string currentUserName)
+        {
+            MembershipUser userToRemove = Membership.GetUser(userNameToRemove);
+            string userToRemoveId = userToRemove.ProviderUserKey.ToString();
+            var guidToRemove = new Guid(userToRemoveId);
+            var myUserRepository = new MembershipUserRepository();
+
+            if (!IsUserOnAccount(guidToRemove))
+            {
+                // TODO: Should I throw an exception here? It is an exception if this occurs.
+                return false;
+            }
+
+            MembershipUser currentUser = Membership.GetUser(currentUserName);
+            string currentUserId = currentUser.ProviderUserKey.ToString();
+            var currentGuid = new Guid(currentUserId);
+
+            if (!IsUserOnAccount(currentGuid))
+            {
+                // TODO: What do we do when this occurs?.
+                if (!(myUserRepository.IsUserInRole(currentUserName, Roles.Administrators)) &&
+                    !(myUserRepository.IsUserInRole(currentUserName, Roles.SalesAgents)))
+                {
+                    return false;
+                }
+                return true;
+            }
+
+            if ((userNameToRemove == currentUserName) && !(myUserRepository.IsUserInRole(currentUserName, Roles.Administrators)))
+            {
+                return false; // Only admin can remove self
+            }
+
+            return true;
+        }
+
+        public List<User> GetUsers()
+        {
+            // TODO: Is this part of the Publisher or User business object, or should there be a repository?
+            throw new NotImplementedException();
+            //var users = new List<User>();
+            //var publisherUsers = User.GetUsersByPublisher(Id);
+
+            //foreach (MembershipUser publisherUser in publisherUsers)
+            //{
+            //}
+
+            //return users;
+        }
+
+        public static void AddPublisherUser(int pubId, string userName)
+        {
+            MembershipUser myUser = Membership.GetUser(userName);
+            string userId = myUser.ProviderUserKey.ToString();
+            var myGuid = new Guid(userId);
+
+            using (var myAdapter = new DataAccessAdapter())
+            {
+                var myPublisherUser = new PublisherAccountUsersEntity { PublisherId = pubId, UserId = myGuid };
+                myAdapter.SaveEntity(myPublisherUser);
+            }
+        }
+
+        //[Obsolete("Use AdvertiserRepository.GetIncludedAdvertisers(int publisherId) instead.")]
+        //public List<string> GetIncludedAdvertisers()
+        //{
+        //    List<Advertiser> allAdvertisers = Advertiser.GetAllAdvertiserAccounts();
+        //    var allAdvertiserNames = new List<string>();
+        //    List<string> myExcludes = GetExcludedAdvertisers();
+        //    var myIncludes = new List<string>();
+
+        //    foreach (Advertiser adv in allAdvertisers)
+        //    {
+        //        allAdvertiserNames.Add(adv.Name);
+        //    }
+
+        //    // remove the excuded advertisers
+        //    foreach (string exclude in myExcludes)
+        //    {
+        //        if (allAdvertiserNames.Contains(exclude))
+        //        {
+        //            allAdvertiserNames.Remove(exclude);
+        //        }
+        //    }
+
+        //    foreach (string adv in allAdvertiserNames)
+        //    {
+        //        myIncludes.Add(adv);
+        //    }
+
+        //    myIncludes.Sort();
+        //    return myIncludes;
+        //}
+
+        //[Obsolete("Use AdvertiserRepository.GetExcludedAdvertisers(int publisherId) instead.")]
+        //public List<string> GetExcludedAdvertisers()
+        //{
+        //    var myExcludedAdvertisers =
+        //        new EntityCollection<PublisherExcludeAdvertisersEntity>(new PublisherExcludeAdvertisersEntityFactory());
+        //    var bucket = new RelationPredicateBucket(PublisherExcludeAdvertisersFields.PublisherId == Id);
+        //    var myAdvertiserNames = new List<string>();
+
+        //    var allAdvertisers = new EntityCollection<AdvertiserEntity>(new AdvertiserEntityFactory());
+
+        //    using (var myAdapter = PersistenceLayer.GetDataAccessAdapter())
+        //    {
+        //        myAdapter.FetchEntityCollection(myExcludedAdvertisers, bucket);
+        //        myAdapter.FetchEntityCollection(allAdvertisers, null);
+        //    }
+
+        //    foreach (PublisherExcludeAdvertisersEntity excludedAdvertiser in myExcludedAdvertisers)
+        //    {
+        //        List<int> matchIndex = allAdvertisers.FindMatches(AdvertiserFields.Id == excludedAdvertiser.AdvertiserId);
+        //        myAdvertiserNames.Add(allAdvertisers[matchIndex[0]].Name);
+        //    }
+
+        //    myAdvertiserNames.Sort();
+        //    return myAdvertiserNames;
+        //}
+
+        //public static List<string> GetExcludedAdvertisersById(int pubId)
+        //{
+        //    var myExcludedAdvertisers =
+        //        new EntityCollection<PublisherExcludeAdvertisersEntity>(new PublisherExcludeAdvertisersEntityFactory());
+        //    var bucket = new RelationPredicateBucket(PublisherExcludeAdvertisersFields.PublisherId == pubId);
+        //    var myAdvertiserNames = new List<string>();
+
+        //    var allAdvertisers = new EntityCollection<AdvertiserEntity>(new AdvertiserEntityFactory());
+
+        //    using (var myAdapter = new DataAccessAdapter())
+        //    {
+        //        myAdapter.FetchEntityCollection(myExcludedAdvertisers, bucket);
+        //        myAdapter.FetchEntityCollection(allAdvertisers, null);
+        //    }
+
+        //    foreach (PublisherExcludeAdvertisersEntity excludedAdvertiser in myExcludedAdvertisers)
+        //    {
+        //        List<int> matchIndex = allAdvertisers.FindMatches(AdvertiserFields.Id == excludedAdvertiser.AdvertiserId);
+        //        myAdvertiserNames.Add(allAdvertisers[matchIndex[0]].Name);
+        //    }
+
+        //    myAdvertiserNames.Sort();
+        //    return myAdvertiserNames;
+        //}
+
+        //[Obsolete("Use AdvertiserRepository.UpdateExcludedAdvertisersById() instead.")]
+        //public void UpdateExcludedAdvertisers(List<string> advertisersToExclude, List<string> advertisersToInclude)
+        //{
+        //    if (advertisersToExclude != null)
+        //    {
+        //        var myExcludesToUpdate = new EntityCollection<PublisherExcludeAdvertisersEntity>();
+        //        var allExcludes = new EntityCollection<PublisherExcludeAdvertisersEntity>();
+        //        using (var myAdapter = PersistenceLayer.GetDataAccessAdapter())
+        //        {
+        //            var bucket = new RelationPredicateBucket(PublisherExcludeAdvertisersFields.PublisherId == Id);
+        //            myAdapter.DeleteEntitiesDirectly("PublisherExcludeAdvertisersEntity", bucket);
+        //            myAdapter.FetchEntityCollection(allExcludes, null);
+        //        }
+
+        //        List<Advertiser> allAdvertisers = Advertiser.GetAllAdvertiserAccounts();
+        //        foreach (string advertiserName in advertisersToExclude)
+        //        {
+        //            foreach (Advertiser adv in allAdvertisers)
+        //            {
+        //                if (adv.Name == advertiserName)
+        //                {
+        //                    myExcludesToUpdate.Add(new PublisherExcludeAdvertisersEntity(Id, adv.Id));
+        //                }
+        //            }
+        //        }
+        //        using (var myAdapter = PersistenceLayer.GetDataAccessAdapter())
+        //        {
+        //            myAdapter.SaveEntityCollection(myExcludesToUpdate);
+        //        }
+        //    }
+
+        //    // SAS: Working on adding notification here.
+        //    var myNotificationService = new NotificationService(new AspNetEmailProvider(), new WindowsFileSystem(), new UserRepository());
+        //    myNotificationService.EmailNotificationOfPublisherAdFilterChange("templatePath", this, String.Join("\n", GetExcludedAdvertisers().ToArray()));
+        //}
+
+        //[Obsolete("Use AdvertiserRepository.UpdateExcludedAdvertisersById() instead.")]
+        //public static void UpdateExcludedAdvertisersById(int pubId, List<string> advertisersToExclude, List<string> advertisersToInclude)
+        //{
+        //    if (advertisersToExclude != null)
+        //    {
+        //        List<Advertiser> allAdvertisers = Advertiser.GetAllAdvertiserAccounts();
+        //        var myExcludesToUpdate = new EntityCollection<PublisherExcludeAdvertisersEntity>();
+        //        var allExcludes =
+        //            new EntityCollection<PublisherExcludeAdvertisersEntity>(
+        //                new PublisherExcludeAdvertisersEntityFactory());
+        //        using (var myAdapter = new DataAccessAdapter())
+        //        {
+        //            var bucket = new RelationPredicateBucket(PublisherExcludeAdvertisersFields.PublisherId == pubId);
+        //            myAdapter.DeleteEntitiesDirectly("PublisherExcludeAdvertisersEntity", bucket);
+        //            myAdapter.FetchEntityCollection(allExcludes, null);
+        //        }
+
+        //        foreach (string advertiserName in advertisersToExclude)
+        //        {
+        //            foreach (Advertiser adv in allAdvertisers)
+        //            {
+        //                if (adv.Name == advertiserName)
+        //                {
+        //                    myExcludesToUpdate.Add(new PublisherExcludeAdvertisersEntity(pubId, adv.Id));
+        //                }
+        //            }
+        //        }
+        //        using (var myAdapter = new DataAccessAdapter())
+        //        {
+        //            myAdapter.SaveEntityCollection(myExcludesToUpdate);
+        //        }
+        //    }
+        //}
+
+        public static void EnablePublisher(int pubId)
+        {
+            var myPublisher = new Site(pubId) { Status = ((int)PublisherStatuses.Active) };
+            myPublisher.Save();
+        }
+
+        public static void DisablePublisher(int pubId)
+        {
+            var myPublisher = new Site(pubId);
+            switch (myPublisher.Status)
+            {
+                case (int)PublisherStatuses.Active:
+                    myPublisher.Status = (int)PublisherStatuses.Inactive;
+                    break;
+                case (int)PublisherStatuses.Pending:
+                    myPublisher.Status = (int)PublisherStatuses.Declined;
+                    break;
+                default:
+                    break;
+            }
+            myPublisher.Save();
+        }
+
+        public static string GetPublisherNameById(int pubId)
+        {
+            if (pubId != 0)
+            {
+                var myPub = new SiteEntity(pubId);
+                using (var myAdapter = new DataAccessAdapter())
+                {
+                    myAdapter.FetchEntity(myPub);
+                }
+                return myPub.Name;
+            }
+            return "Error: No publisher selected.";
+        }
+
+        public static bool Exists(string publisherName)
+        {
+            var myPublishers = new EntityCollection<SiteEntity>(new SiteEntityFactory());
+            var bucket = new RelationPredicateBucket();
+            bucket.PredicateExpression.Add((SiteFields.Name == publisherName));
+
+            using (var myAdapter = new DataAccessAdapter())
+            {
+                myAdapter.FetchEntityCollection(myPublishers, bucket);
+
+                return myPublishers.Count > 0;
+            }
+        }
+
+        /// <summary>
+        /// Returns true if the user is associated with the account and is in the Publishers Role.
+        /// or if the user is an admin.
+        /// </summary>
+        /// <param name="userName"></param>
+        /// <returns></returns>
+        public bool AllowUserAccess(string userName)
+        {
+            MembershipUser user = Membership.GetUser(userName);
+            var userId = (Guid)user.ProviderUserKey;
+            var myUserRepository = new MembershipUserRepository();
+
+            // admins always are allowed.
+            if (myUserRepository.IsUserInRole(userName, Roles.Administrators))
+            {
+                return true;
+            }
+
+            // sales agents are always allowed.
+            if (myUserRepository.IsUserInRole(userName, Roles.SalesAgents))
+            {
+                return true;
+            }
+
+            // non-admin, non-publisher roles are not
+            if (!myUserRepository.IsUserInRole(userName, Roles.Publishers))
+            {
+                return false;
+            }
+
+            // it's not enough to be in the publisher role, you have to be associated with *this* publisher
+            if (IsUserOnAccount(userId))
+            {
+                return true;
+            }
+            // otherwise, forget it
+            return false;
+        }
+
+        public static SiteEntity GetPublisherById(int pubId)
+        {
+            var myEntity = new SiteEntity(pubId);
+            using (var myAdapter = new DataAccessAdapter())
+            {
+                myAdapter.FetchEntity(myEntity);
+            }
+            return myEntity;
+        }
+
+        public static bool TaxIdIsSocialSecurityNumber(int pubId)
+        {
+            W9Form myW9 = new Site(pubId).RecentW9Form;
+
+            if (myW9.TaxIdentification.Split('-').Length == 3)
+            {
+                return true;
+            }
+            return false;
+        }
+
+        public static List<Site> FetchAllSites(PublisherStatuses? status)
+        {
+            string cacheKey = status == null
+                                  ? "AdminDefaultAllPublisherAccounts"
+                                  :
+                                      "AdminDefaultAllPublisherAccounts" + status.Value;
+            var allSites = SuperCache.Instance()[cacheKey] as List<Site>;
+
+            if (allSites == null)
+            {
+                // Fetch the data from the database
+                allSites = new List<Site>();
+                var publisherEntities = new EntityCollection<SiteEntity>(new SiteEntityFactory());
+                var filter = new RelationPredicateBucket();
+                if (status != null)
+                {
+                    filter.PredicateExpression.Add(SiteFields.Status == (int)status);
+                }
+                using (var myAdapter = new DataAccessAdapter())
+                {
+                    myAdapter.FetchEntityCollection(publisherEntities, filter);
+                }
+
+              //  publisherEntities.Sort(PublisherFields.Name.FieldIndex, ListSortDirection.Ascending);
+
+                foreach (SiteEntity eachPublisher in publisherEntities)
+                {
+                    var myPublisher = new Site(eachPublisher);
+                    allSites.Add(myPublisher);
+                }
+
+                IAccountComparer comparer = new IAccountComparer();
+                comparer.AccountComparisonMethod = AccountComparisonType.StatusAndName;
+                allSites.Sort(comparer);
+
+                var dependencyFactory = new CacheDependencyFactory();
+                CacheDependency sqlDependency =
+                    dependencyFactory.CreateSqlCacheDependency(new Site().TableDependency);
+                SuperCache.Instance().Insert(cacheKey, allSites, sqlDependency);
+            }
+
+            return allSites;
+        }
+
+
+        public static List<Zone> GetAvailableZonesOfFormat(int publisherId, int creativeFormatId)
+        {
+            var zoneEntities = new EntityCollection<ZoneEntity>(new ZoneEntityFactory());
+            var zones = new List<Zone>();
+            var bucket = new RelationPredicateBucket();
+            bucket.PredicateExpression.Add(ZoneFields.PublisherId == publisherId);
+            using (var myAdapter = new DataAccessAdapter())
+            {
+                myAdapter.FetchEntityCollection(zoneEntities, bucket);
+
+                foreach (ZoneEntity zone in zoneEntities)
+                {
+                    var formatsInZone = new EntityCollection<FormatsInZoneEntity>(new FormatsInZoneEntityFactory());
+                    myAdapter.FetchEntityCollection(formatsInZone, zone.GetRelationInfoFormatsInZone());
+                    foreach (FormatsInZoneEntity zoneFormat in formatsInZone)
+                    {
+                        if (zoneFormat.CreativeFormatId == creativeFormatId)
+                        {
+                            zones.Add(new Zone(zone));
+                        }
+                    }
+                }
+            }
+
+            return zones;
+        }
+
+        /// <summary>
+        /// Returns a count of the number of publisher accounts with a given status
+        /// </summary>
+        /// <param name="status"></param>
+        /// <returns></returns>
+        public static int GetPublisherCount(PublisherStatuses? status)
+        {
+            return new SiteRepository().GetSiteCount(status);
+        }
+
+        /// <summary>
+        /// Obtains the count of the number of active publishers rounded to the nearest 10 lower than the count.
+        /// </summary>
+        /// <returns></returns>
+        public static int GetRoundedActivePublisherCount()
+        {
+            int result = GetPublisherCount(PublisherStatuses.Active);
+
+            if (result <= 0)
+                return 0;
+
+            result = Math.Round(result, 10, true);
+
+            return result;
+        }
+
+        public static string GetDescriptiveActivePublisherCount()
+        {
+            int count = GetRoundedActivePublisherCount();
+
+            return string.Format("{0} ({1})", Math.IntToWord(count), count);
+        }
+
+        public static List<Site> GetAllSitesWithZones()
+        {
+            const string cacheKey = "GetAllSitesWithZones";
+            var allSitesWithZones = SuperCache.Instance()[cacheKey] as List<Site>;
+
+            if (allSitesWithZones == null)
+            {
+                var siteEntities =
+                    new EntityCollection<SiteEntity>(new SiteEntityFactory());
+                allSitesWithZones = new List<Site>();
+                var bucket = new RelationPredicateBucket();
+                bucket.PredicateExpression.Add(SiteFields.Status == (int)PublisherStatuses.Active);
+                bucket.Relations.Add(SiteEntity.Relations.ZoneEntityUsingPublisherId);
+                bucket.PredicateExpression.Add(ZoneFields.Enabled == true);
+                using (var myAdapter = new DataAccessAdapter())
+                {
+                    myAdapter.FetchEntityCollection(siteEntities, bucket);
+                }
+                foreach (SiteEntity siteEntity in siteEntities)
+                {
+                    allSitesWithZones.Add(new Site(siteEntity));
+                }
+                var dependencyFactory = new CacheDependencyFactory();
+                CacheDependency sqlDependency = dependencyFactory.CreateSqlCacheDependency(new Zone().TableDependency);
+                SuperCache.Instance().Insert(cacheKey, allSitesWithZones, sqlDependency);
+            }
+            return allSitesWithZones;
+        }
+
+        public static List<Site> GetAllSitesByPublisherAccountId(int publisherAccountId)
+        {
+            string cacheKey = "GetAllSitesByPublisherAccountId-" + publisherAccountId;
+            var sites = SuperCache.Instance()[cacheKey] as List<Site>;
+
+            if (sites == null)
+            {
+                var siteEntities =
+                    new EntityCollection<SiteEntity>(new SiteEntityFactory());
+                sites = new List<Site>();
+                var bucket = new RelationPredicateBucket();
+                bucket.PredicateExpression.Add(SiteFields.Status == (int)PublisherStatuses.Active);
+                bucket.PredicateExpression.AddWithAnd(SiteFields.PublisherAccountId == publisherAccountId);
+                using (var myAdapter = new DataAccessAdapter())
+                {
+                    myAdapter.FetchEntityCollection(siteEntities, bucket);
+                }
+                foreach (SiteEntity siteEntity in siteEntities)
+                {
+                    sites.Add(new Site(siteEntity));
+                }
+                var dependencyFactory = new CacheDependencyFactory();
+                CacheDependency sqlDependency = dependencyFactory.CreateSqlCacheDependency(new PublisherAccount().TableDependency);
+                SuperCache.Instance().Insert(cacheKey, sites, sqlDependency);
+            }
+            return sites;
+        }
+
+        public static DataTable GetAllPublisherBalances(int? status)
+        {
+            const string query = @"
+select s.ID, s.Name,
+    isnull((select sum(Amount) from lq_PublisherRevenueSummary WHERE PublisherID = s.ID),0) as Earnings,
+    isnull((select sum(Amount) from lq_PublisherPayment WHERE PublisherID = s.ID),0) as Payments,
+    (isnull((select sum(Amount) from lq_PublisherRevenueSummary WHERE PublisherID = s.ID),0) -
+        isnull((select sum(Amount) from lq_PublisherPayment WHERE PublisherID = s.ID),0)) as Balance,
+    (select max(DateRecorded) from lq_PublisherRevenueSummary WHERE PublisherID = s.ID) as LastEarningPosted,
+    (select max(DatePaid) from lq_PublisherPayment WHERE PublisherID = s.ID) as LastPaymentPosted,
+    pInfo.PayableTo as PayableTo,
+    pm.Name as PaymentMethod,
+    a.DateUpdated as DateAddressUpdated,
+    a.DateConfirmed as DateAddressConfirmed,
+    a.ID as AddressID,
+    case when (a.DateUpdated >= isnull(a.DateConfirmed, a.DateUpdated)) then cast(1 as bit)
+    else cast(0 as bit) end AddressHasChanged,
+    w9form.Id W9FormId,
+    CASE
+        WHEN Verifiedby is not null THEN cast(1 as bit)
+        WHEN w9Form.id is not null THEN cast(0 as bit)
+        ELSE NULL
+    END IsW9Verified
+
+from lq_site s
+	inner join lq_PublisherAccount pa on s.PublisherAccountID = pa.ID
+    inner join lq_PaymentInfo pInfo on pInfo.Id = pa.PaymentInfoId
+    inner join lq_PaymentMethod pm on pm.ID = pInfo.PaymentMethodId
+    inner join lq_Address a on a.ID = pInfo.PaymentAddressID
+    left outer join
+    (
+        select Id, PublisherId, verifiedby from lq_W9Form where Id in (select max(Id) from lq_w9form group by PublisherId)
+    ) w9form on w9form.PublisherId = s.Id
+where s.status = isnull(@status, status)
+order by pInfo.PayableTo
+";
+            var sqlParams = new List<SqlParameter> { new SqlParameter("@status", status) };
+            Debug.LogQueryDetails(query, sqlParams);
+            return
+                SqlHelper.ExecuteDataset(Common.ConnectionString, CommandType.Text, query, sqlParams.ToArray()).Tables[0];
+        }
+
+        public static DataTable GetPublisherPerformance(DateTime month)
+        {
+            month = month.Date;
+            var firstOfMonth = new DateTime(month.Year, month.Month, 1);
+            DateTime lastOfMonth = new DateTime(month.AddMonths(1).Year, month.AddMonths(1).Month, 1).AddDays(-1);
+            const string query = @"
+                select p.Name [PublisherName], cf.Name [CreativeFormatName], Sum(AmountEarned) [Earnings], Sum(Impressions) [Impressions],
+                    Sum(Clicks) [Clicks], dbo.CTR(SUM(al.Impressions),SUM(al.Clicks)) AS [CTR %],
+                    (Sum(AmountEarned) / (Sum(Impressions)/ 1000.00)) [Earnings Per Thousand Impressions],
+                    (Sum(AmountEarned) / NullIf(Sum(Clicks),0)) [Earnings Per Click],
+                    (Sum(AmountEarned) / NullIf(Sum(Clicks),0)) * 2 [CPC]
+                FROM lq_ActivityLogSummary al INNER JOIN
+                    lq_CreativeFormat cf ON cf.ID = al.CreativeFormatID INNER JOIN
+                    lq_CreativesInPlacement cp ON cp.PlacementID = al.PlacementID
+                        and cp.CreativeID = al.CreativeID FULL OUTER JOIN
+
+                    (
+                    select PublisherID, PlacementID, Sum(AmountEarned) as AmountEarned
+                    from lq_PublisherRevenue pr
+                    where DateRecorded between @MonthStartDate and @MonthEndDate
+                    group by PublisherID, PlacementID
+                    ) pr ON pr.PublisherID = al.PublisherID
+                        and pr.PlacementID = al.PlacementID LEFT OUTER JOIN
+                    lq_Site p ON p.ID = al.PublisherID
+                where Month = @Month and Year = @Year and cp.CanTrackClicks = 1
+                group by cf.Name, p.Name
+                HAVING SUM(al.Impressions) > 300
+                order by cf.Name, [CTR %] DESC
+                ";
+            Debug.LogQueryDetails(query, null);
+            var sqlParams = new List<SqlParameter>
+                                {
+                                    new SqlParameter("@MonthStartDate", firstOfMonth),
+                                    new SqlParameter("@MonthEndDate", lastOfMonth),
+                                    new SqlParameter("@Month", firstOfMonth.Month),
+                                    new SqlParameter("@Year", firstOfMonth.Year)
+                                };
+            Debug.LogQueryDetails(query, sqlParams);
+            return
+                SqlHelper.ExecuteDataset(Common.ConnectionString, CommandType.Text, query, sqlParams.ToArray()).Tables[0
+                    ];
+        }
+
+        public static decimal FetchEarningsForMonth(int publisherId, DateTime monthDate, bool? confirmed)
+        {
+            var startDate = new DateTime(monthDate.Year, monthDate.Month, 1);
+            DateTime endDate = startDate.AddMonths(1).AddDays(-1);
+            const string query = @"
+                SELECT SUM(AmountEarned)
+                FROM lq_PublisherRevenue
+                WHERE PublisherID = @PublisherID
+                AND DateRecorded BETWEEN @StartDate AND @EndDate
+                AND IsAmountConfirmed = IsNull(@Confirmed, IsAmountConfirmed)
+                ";
+            var sqlParams = new List<SqlParameter>
+                                {
+                                    new SqlParameter("@StartDate", startDate),
+                                    new SqlParameter("@EndDate", endDate),
+                                    new SqlParameter("@PublisherID", publisherId),
+                                    new SqlParameter("@Confirmed", confirmed)
+                                };
+            Debug.LogQueryDetails(query, sqlParams);
+            object result = SqlHelper.ExecuteScalar(Common.ConnectionString, CommandType.Text, query,
+                                                    sqlParams.ToArray());
+            return Parse.To<decimal>(result.ToString(), false);
+        }
+
+        public static List<string> GetYearsForPublisherCharts(DateTime? currentDate)
+        {
+            // Set up the year list
+            var yearList = new List<string>();
+            DateTime year = currentDate.HasValue ? currentDate.Value : DateTime.Today;
+            // initial year should be 2 yrs ago.
+            year = new DateTime(year.Year, 1, 1).AddYears(-2);
+            while (year <= currentDate)
+            {
+                yearList.Add(year.Year.ToString());
+                year = year.AddYears(1);
+            }
+            return yearList;
+        }
+
+        public static decimal GetEarningsForCurrentMonth(int publisherId, DateTime currentDate)
+        {
+            var startDate = new DateTime(currentDate.Year, currentDate.Month, 1);
+            var endDate = new DateTime(currentDate.Year, currentDate.Month, currentDate.Day);
+
+            return GetEarnings(startDate, endDate, publisherId);
+        }
+
+        public static decimal GetEarnings(DateTime startDate, DateTime endDate, int publisherId)
+        {
+            object result;
+
+            using (var myAdapter = new DataAccessAdapter())
+            {
+                IRelationPredicateBucket filter = new RelationPredicateBucket();
+                filter.PredicateExpression.Add(PublisherRevenueFields.DateRecorded >= startDate);
+                filter.PredicateExpression.Add(PublisherRevenueFields.DateRecorded <= endDate);
+                filter.PredicateExpression.Add(PublisherRevenueFields.PublisherId == publisherId);
+                result = myAdapter.GetScalar(PublisherRevenueFields.AmountEarned, null, AggregateFunction.Sum,
+                                             filter.PredicateExpression);
+            }
+
+            return Parse.To<decimal>(result.ToString(), false);
+        }
+
+        public static decimal GetLifetimeEarnings(int publisherId)
+        {
+            return GetEarningsSummary(new DateTime(2007, 8, 1), DateTime.Today, publisherId);
+        }
+
+        public static decimal GetEarningsSummary(DateTime startDate, DateTime endDate, int publisherId)
+        {
+            object result;
+
+            using (var myAdapter = new DataAccessAdapter())
+            {
+                IRelationPredicateBucket filter = new RelationPredicateBucket();
+                filter.PredicateExpression.Add(PublisherRevenueSummaryFields.DateRecorded >= startDate);
+                filter.PredicateExpression.Add(PublisherRevenueSummaryFields.DateRecorded <= endDate);
+                filter.PredicateExpression.Add(PublisherRevenueSummaryFields.PublisherId == publisherId);
+                result = myAdapter.GetScalar(PublisherRevenueSummaryFields.Amount, null, AggregateFunction.Sum,
+                                             filter.PredicateExpression);
+            }
+
+            return Parse.To<decimal>(result.ToString(), false);
+        }
+
+        public static bool AreAllEarningsConfirmed(DateTime startDate, DateTime endDate, int publisherId)
+        {
+            object result;
+
+            using (var myAdapter = new DataAccessAdapter())
+            {
+                IRelationPredicateBucket filter = new RelationPredicateBucket();
+                filter.PredicateExpression.Add(PublisherRevenueFields.DateRecorded >= startDate);
+                filter.PredicateExpression.Add(PublisherRevenueFields.DateRecorded <= endDate);
+                filter.PredicateExpression.Add(PublisherRevenueFields.PublisherId == publisherId);
+                filter.PredicateExpression.Add(PublisherRevenueFields.IsAmountConfirmed == false);
+                result = myAdapter.GetScalar(PublisherRevenueFields.AmountEarned, null, AggregateFunction.Count,
+                                             filter.PredicateExpression);
+            }
+            var resultInteger = Parse.To<int>(result.ToString(), false);
+            return resultInteger == 0; // return true if 0 unconfirmed rows found
+        }
+
+        public static long GetImpressions(int month, int year, int publisherId)
+        {
+            object result;
+
+            using (var myAdapter = new DataAccessAdapter())
+            {
+                IRelationPredicateBucket filter = new RelationPredicateBucket();
+                filter.PredicateExpression.Add(ActivityLogSummaryFields.Month == month);
+                filter.PredicateExpression.Add(ActivityLogSummaryFields.Year == year);
+                filter.PredicateExpression.Add(ActivityLogSummaryFields.PublisherId == publisherId);
+                result = myAdapter.GetScalar(ActivityLogSummaryFields.Impressions, null, AggregateFunction.Sum,
+                                             filter.PredicateExpression);
+            }
+
+            return Parse.To<long>(result.ToString(), false);
+        }
+
+        public static long GetImpressions(int publisherId)
+        {
+            object result;
+
+            using (var myAdapter = new DataAccessAdapter())
+            {
+                IRelationPredicateBucket filter = new RelationPredicateBucket();
+                filter.PredicateExpression.Add(ActivityLogSummaryFields.PublisherId == publisherId);
+                result = myAdapter.GetScalar(ActivityLogSummaryFields.Impressions, null, AggregateFunction.Sum,
+                                             filter.PredicateExpression);
+            }
+
+            return Parse.To<long>(result.ToString(), false);
+        }
+
+        public static void SortPublisherListByName(List<Site> publishers)
+        {
+            publishers.Sort((p1, p2) => p1.Name.CompareTo(p2.Name));
+        }
+
+        #endregion
+
+        public static class Fields
+        {
+            public static int DescriptionMaxLength
+            {
+                get
+                {
+                    return SiteFields.Description.MaxLength;
+                }
+            }
+        }
+    }
+
+    public enum RankTypes
+    {
+        Overall,
+        Impressions,
+        Clicks,
+        CTR,
+        CPM,
+        Google,
+        Alexa
+    }
+
+    public struct RankItem
+    {
+        public double RawValue { get; set; }
+
+        public int Rank { get; set; }
+    }
+}

@@ -1,0 +1,165 @@
+﻿/// Visual Studio Maintainability Index: 32
+/// Cyclomatic Complexity: 28
+/// Class Coupling: 26
+/// Lines of Code: 67
+/// Total Lines of Code in Codebehind File: 789
+protected void SubmitCreativeButton_Click(object sender, EventArgs e)
+{
+    EnsureCreativeNameIsNotAllWhiteSpace();
+    EnsureCreativeDescriptionIsNotAllWhiteSpace();
+    ValidateUniqueCreativeName();
+    if (Globals.Page.IsValid)
+    {
+        var myUser = ((LQPage) this.Page).CurrentUser;
+        MyCreative = new Creative
+                            {
+                                LastUpdateUserId = myUser.UserId,
+                                AdvertiserId     = AdvertiserId,
+                                CreativeFormatId = CreativeFormatId,
+                                CreativeTypeId   = CreativeTypeId
+                            };
+
+        if (CreativeFormatId == Constants.MIXED_IMAGE_TEXT_CREATIVE_FORMAT_ID)
+        {
+            MyCreative.CreativeTypeId = (int) CreativeTypes.Mixed;
+        }
+
+        switch (MyCreative.CreativeTypeId)
+        {
+            case (int) CreativeTypes.Text:
+                if (!MyCreative.IsEmailCreativeFormat)
+                {
+                    MyCreative.SpotlightLine1 = SpotLightLine1Textbox.Text;
+                    MyCreative.SpotlightLine2 = SpotLightLine2Textbox.Text;
+                }
+                else                 
+                    MyCreative.ThirdPartyTags = TagTextBox.Text;                                       
+                break;
+
+            case (int) CreativeTypes.Custom:
+                MyCreative.ThirdPartyServed = CreativeFormatId == Constants.SPONSOR_EMAIL_CREATIVE_FORMAT_ID 
+                                                ? false : true;
+                  
+                MyCreative.ThirdPartyTags = CustomTagTextBox.Text; 
+                break;
+
+            case (int) CreativeTypes.Image:
+            case (int) CreativeTypes.Flash:
+                MyCreative.CreativeUrl = SaveCreativeFile();
+                break;
+            case (int) CreativeTypes.Mixed:
+                MyCreative.CreativeUrl = SaveCreativeFile();
+                MyCreative.ThirdPartyTags = TagTextBox.Text;
+                break;
+            case (int) CreativeTypes.None:
+                break;
+            default:
+                throw new IndexOutOfRangeException("Invalid Creative Type ID " + MyCreative.CreativeTypeId +
+                                                    " detected.");
+        }
+
+        if (!string.IsNullOrEmpty(CreativeNameTextBox.Text))
+        {
+            MyCreative.Name = CreativeNameTextBox.Text;
+        }
+        else
+        {
+            // HACK!!! HACK!!! HACK!!! HACK!!! HACK!!! HACK!!! HACK!!! HACK!!!
+            var myRandom = new Random((int) DateTime.Now.Ticks);
+            string randomNumber = myRandom.Next(1000, 9999).ToString();
+            switch (MyCreative.CreativeTypeId)
+            {
+                case (int) CreativeTypes.Text:
+                    // HACK!!! HACK!!! HACK!!! HACK!!! HACK!!! HACK!!! HACK!!! HACK!!!
+                    MyCreative.Name = MyCreative.SpotlightLine1.Replace("_", " ") + " " + AdvertiserId + " " +
+                                        randomNumber;
+                    break;
+
+                case (int) CreativeTypes.Custom:
+                    // HACK!!! HACK!!! HACK!!! HACK!!! HACK!!! HACK!!! HACK!!! HACK!!!
+                    MyCreative.Name = "Unnamed Custom Creative" + " " + AdvertiserId + " " + randomNumber;
+                    break;
+
+                case (int) CreativeTypes.Image:
+                case (int) CreativeTypes.Flash:
+                    // HACK!!! HACK!!! HACK!!! HACK!!! HACK!!! HACK!!! HACK!!! HACK!!!
+                    MyCreative.Name = ImageOrFlashUpload.FileName.Replace("_", " ") + " " + AdvertiserId + " " +
+                                        randomNumber;
+                    break;
+                case (int) CreativeTypes.Mixed:
+                    MyCreative.Name = ImageOrFlashUpload.FileName.Replace("_", " ") + " " + AdvertiserId + " " +
+                                        randomNumber;
+                    break;
+                case (int)CreativeTypes.None:
+                    // HACK!!! HACK!!! HACK!!! HACK!!! HACK!!! HACK!!! HACK!!! HACK!!!
+                    MyCreative.Name = "Unnamed Placeholder Creative" + " " + AdvertiserId + " " + randomNumber;
+                    break;
+                default:
+                    throw new IndexOutOfRangeException("Invalid Creative Type ID " + MyCreative.CreativeTypeId +
+                                                        " detected.");
+            }
+        }
+
+        if (!string.IsNullOrEmpty(CreativeDescriptionTextBox.Text) && CreativeDescriptionTextBox.Text.Length < 200)
+        {
+            MyCreative.Description = CreativeDescriptionTextBox.Text;
+        }
+
+        Creative autoTextCreative = GenerateTC.Checked
+                                        ? new Creative
+                                                {
+                                                    LastUpdateUserId = myUser.UserId,
+                                                    AdvertiserId = AdvertiserId,
+                                                    CreativeFormatId = CreativeFormatId,
+                                                    CreativeTypeId = (int) CreativeTypes.Text,
+                                                    Name =
+                                                        String.Format(StringResources.CreativeName_AutoText,
+                                                                    MyCreative.Name),
+                                                    Description = String.Format(StringResources.CreativeDescription_TextAutoGenerate, 
+                                                    MyCreative.Name),
+                                                    ThirdPartyServed = MyCreative.ThirdPartyServed,
+                                                    ThirdPartyTags = WebUtilities.StripHtml(MyCreative.ThirdPartyTags)
+                                                } : null;   
+        if (PlacementId > 0)
+        {
+            MyCreative.SaveInPlacement(PlacementId, ((LQPage) Page).Advertiser);
+            if (autoTextCreative != null)
+            {
+                autoTextCreative.SaveInPlacement(PlacementId, ((LQPage)Page).Advertiser);
+            }
+        }
+        else
+        {
+            MyCreative.Save();
+            if (autoTextCreative != null)
+                autoTextCreative.Save();
+        }
+
+        if (ResetAfterSubmit)
+        {
+            Reset();
+        }
+
+        if (HideAfterSubmit)
+        {
+            Visible = false;
+            // HACK: Redirect to parent page (ZSB)
+            Page parentPage = Page;
+            if (!string.IsNullOrEmpty(parentPage.Request.QueryString["newFromCreativeId"]) &&
+                !string.IsNullOrEmpty(parentPage.Request.QueryString["placementId"]))
+            {
+                string url = parentPage.Request.Url.PathAndQuery;
+                url = Regex.Replace(url, @"&?newFromCreativeId=\d+", string.Empty);
+                Response.Redirect(url);
+            }
+            Response.Redirect(parentPage.Request.Url.PathAndQuery);
+        }
+        else
+        {
+            Session["NewCreativeName"] = MyCreative.Name;
+            Session["NewCreativeFormatId"] = MyCreative.CreativeFormatId;
+            // HACK: May not always go here. This is not the best way to address this location
+            Response.Redirect(ResolveUrl("~/Admin/Adv/ListCreatives.aspx?advId=" + AdvertiserId));
+        }
+    }
+}
